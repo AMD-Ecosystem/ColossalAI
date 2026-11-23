@@ -23,7 +23,7 @@ except ImportError:
     HAS_TRITON = False
     print("please install triton from https://github.com/openai/triton")
 
-TRITON_CUDA_SUPPORT = version.parse(torch.version.cuda) > version.parse("11.4")
+TRITON_CUDA_SUPPORT = torch.version.hip is not None or version.parse(torch.version.cuda) > version.parse("11.4")
 
 HEAD_DIM = 128
 

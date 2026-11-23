@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from colossalai.accelerator import get_accelerator
-from colossalai.quantization.fp8 import linear_fp8
+from colossalai.quantization.fp8 import linear_fp8, scaled_mm_fp8_formats
 from colossalai.quantization.fp8_hook import FP8Hook
 from colossalai.tensor.colo_parameter import ColoParameter
 from colossalai.tensor.param_op_hook import ColoParamOpHookManager
@@ -30,12 +30,18 @@ class FP8TestHook(FP8Hook):
         return func
 
 
+# ROCm GPUs report AMD architecture numbers as their capability, so ask whether the device has an fp8 GEMM.
+if torch.version.hip is not None:
+    FP8_GEMM_UNSUPPORTED = scaled_mm_fp8_formats() is None
+else:
+    FP8_GEMM_UNSUPPORTED = get_accelerator().get_device_capability()[0] < 9
+
 D_IN, D_OUT = 16, 32
 B, S = 2, 64
 DTYPE = torch.bfloat16
 
 
-@pytest.mark.skipif(get_accelerator().get_device_capability()[0] < 9, reason="Test requires device capability >= 9.0")
+@pytest.mark.skipif(FP8_GEMM_UNSUPPORTED, reason="Test requires an fp8 GEMM (device capability >= 9.0 on CUDA)")
 def test_fp8_hook():
     # create tensors
     w = nn.Parameter(torch.rand(D_OUT, D_IN, device=get_current_device(), dtype=DTYPE))

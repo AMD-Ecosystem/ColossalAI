@@ -25,6 +25,8 @@ class CudaAccelerator(BaseAccelerator):
         """
         Return the version of the accelerator which torch is built against.
         """
+        if torch.version.hip is not None:
+            return torch.version.hip
         return torch.version.cuda
 
     def get_current_device(self) -> torch.device:

@@ -23,7 +23,7 @@ except:
     warnings.warn("Please install torch_int from https://github.com/Guangxuan-Xiao/torch-int")
 
 
-CUDA_SUPPORT = version.parse(torch.version.cuda) > version.parse("11.4")
+CUDA_SUPPORT = torch.version.hip is not None or version.parse(torch.version.cuda) > version.parse("11.4")
 
 
 def torch_llama_mlp(gate_proj, up_proj, down_proj, x):

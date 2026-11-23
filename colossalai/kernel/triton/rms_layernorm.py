@@ -1,3 +1,5 @@
+import torch
+
 try:
     import triton
     import triton.language as tl
@@ -103,8 +105,9 @@ if HAS_TRITON:
         if N > MAX_FUSED_SIZE:
             raise RuntimeError("This layer norm doesn't support feature dim >= 64KB.")
 
-        # heuristics for number of warps
-        num_warps = min(max(triton.next_power_of_2(N) // 256, 8), 32)
+        # heuristics for number of warps, within the 1024 threads of a block (AMD warps can be 64 wide)
+        max_num_warps = 1024 // torch.cuda.get_device_properties(x.device).warp_size
+        num_warps = min(max(triton.next_power_of_2(N) // 256, 8), max_num_warps)
 
         # enqueue kernel
         if residual is None:

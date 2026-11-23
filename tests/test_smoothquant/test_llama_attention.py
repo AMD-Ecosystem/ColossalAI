@@ -19,7 +19,7 @@ except ImportError:
     print("Please install torch_int from https://github.com/Guangxuan-Xiao/torch-int")
 
 
-TRITON_CUDA_SUPPORT = version.parse(torch.version.cuda) > version.parse("11.4")
+TRITON_CUDA_SUPPORT = torch.version.hip is not None or version.parse(torch.version.cuda) > version.parse("11.4")
 
 import math
 

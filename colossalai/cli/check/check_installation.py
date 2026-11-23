@@ -61,6 +61,8 @@ def check_installation():
     click.echo(f"PyTorch version: {to_click_output(torch_version)}")
     click.echo(f"System CUDA version: {to_click_output(cuda_version)}")
     click.echo(f"CUDA version required by PyTorch: {to_click_output(torch_cuda_version)}")
+    if torch.version.hip is not None:
+        click.echo(f"HIP version required by PyTorch (ROCm build): {torch.version.hip}")
     click.echo("")
     click.echo(f"Note:")
     click.echo(f"1. The table above checks the versions of the libraries/tools in the current environment")

@@ -1,4 +1,5 @@
 import os
+from functools import lru_cache
 from typing import Any, Optional, Tuple
 
 import numpy as np
@@ -19,6 +20,42 @@ try:
     cuda_arch = int("".join(str(i) for i in torch.cuda.get_device_capability()))
 except:
     cuda_arch = 0
+
+
+_FP8_TYPES = {
+    "e4m3": torch.float8_e4m3fn,
+    "e5m2": torch.float8_e5m2,
+    "e4m3fnuz": torch.float8_e4m3fnuz,
+    "e5m2fnuz": torch.float8_e5m2fnuz,
+}
+
+
+@torch.compiler.disable
+@lru_cache(maxsize=None)
+def _rocm_scaled_mm_fp8_formats(device_index: int) -> Optional[Tuple[str, str]]:
+    # AMD GPUs differ in which fp8 encodings their GEMMs take: MI300-series GPUs
+    # take only the fnuz variants, newer ones the OCP formats, older ones none.
+    device = torch.device("cuda", device_index)
+    one = torch.ones((), device=device)
+    for formats in (("e4m3", "e5m2"), ("e4m3fnuz", "e5m2fnuz")):
+        a = torch.zeros(16, 16, device=device, dtype=_FP8_TYPES[formats[0]])
+        try:
+            torch._scaled_mm(a, a.t(), scale_a=one, scale_b=one, out_dtype=torch.bfloat16)
+        except RuntimeError:
+            continue
+        return formats
+    return None
+
+
+def scaled_mm_fp8_formats(device: Optional[torch.device] = None) -> Optional[Tuple[str, str]]:
+    """
+    Return the (e4m3, e5m2) fp8_format names to cast to for torch._scaled_mm on the device, or None when
+    the device has no fp8 GEMM. CUDA uses the OCP formats.
+    """
+    if torch.version.hip is None:
+        return "e4m3", "e5m2"
+    index = torch.cuda.current_device() if device is None or device.index is None else device.index
+    return _rocm_scaled_mm_fp8_formats(index)
 
 
 class Handle:
@@ -60,7 +97,7 @@ def cast_to_fp8(
         inp: input torch Tensor, should be in torch.FloatTensor, torch.HalfTensor, torch.BFloat16Tensor.
         scale: scaling factor for fp8 casting. If it is None, then it is computed automatically. Per-channel scaling
         is applied if input tensor is 2 dimension, otherwise, per-tensor scaling is applied.
-        fp8_format: e4m3 or e5m2
+        fp8_format: e4m3 or e5m2, or e4m3fnuz or e5m2fnuz (see scaled_mm_fp8_formats)
 
     Returns:
         Tuples: A tuple (fp8_tensor, scale)
@@ -69,7 +106,7 @@ def cast_to_fp8(
     if inp.dtype not in [torch.float32, torch.float16, torch.bfloat16]:
         raise TypeError("Only float16, bfloat16, and float32 are allowed.")
 
-    fp8_type = torch.float8_e4m3fn if fp8_format == "e4m3" else torch.float8_e5m2
+    fp8_type = _FP8_TYPES.get(fp8_format, torch.float8_e5m2)
     fp8_max = torch.finfo(fp8_type).max
 
     if inp.numel() == 0:
@@ -796,8 +833,9 @@ class _LinearFp8(torch.autograd.Function):
         ctx.out_dtype = x.dtype
         x = x.reshape(-1, x.shape[-1])
 
-        x_fp8, inv_scale_x = cast_to_fp8(x, fp8_format="e4m3")
-        w_fp8, inv_scale_w = cast_to_fp8(w, fp8_format="e4m3")
+        e4m3, ctx.e5m2 = scaled_mm_fp8_formats(x.device)
+        x_fp8, inv_scale_x = cast_to_fp8(x, fp8_format=e4m3)
+        w_fp8, inv_scale_w = cast_to_fp8(w, fp8_format=e4m3)
         ctx.x_fp8 = x_fp8
         ctx.w_fp8_t = w_fp8.t()
         ctx.inv_scale_x = inv_scale_x
@@ -820,7 +858,7 @@ class _LinearFp8(torch.autograd.Function):
     @staticmethod
     def backward(ctx: Any, out_grad) -> Any:
         out_grad = out_grad.reshape(-1, out_grad.shape[-1])
-        out_grad_fp8, out_grad_scale = cast_to_fp8(out_grad, fp8_format="e5m2")
+        out_grad_fp8, out_grad_scale = cast_to_fp8(out_grad, fp8_format=ctx.e5m2)
         x_grad = torch._scaled_mm(
             out_grad_fp8,
             ctx.w_fp8_t.contiguous().t(),

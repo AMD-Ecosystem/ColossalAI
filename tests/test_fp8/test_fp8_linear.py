@@ -4,8 +4,14 @@ import torch.nn.functional as F
 from torch.testing import assert_close
 
 from colossalai.accelerator import get_accelerator
-from colossalai.quantization.fp8 import _LinearFp8, linear_fp8
+from colossalai.quantization.fp8 import _LinearFp8, linear_fp8, scaled_mm_fp8_formats
 from colossalai.utils import get_current_device
+
+# ROCm GPUs report AMD architecture numbers as their capability, so ask whether the device has an fp8 GEMM.
+if torch.version.hip is not None:
+    FP8_GEMM_UNSUPPORTED = scaled_mm_fp8_formats() is None
+else:
+    FP8_GEMM_UNSUPPORTED = get_accelerator().get_device_capability()[0] < 9
 
 D_IN, D_OUT = 16, 32
 B, S = 2, 64
@@ -42,7 +48,7 @@ def check_fp8_linear(linear, use_bias: bool, use_batch: bool, dtype: torch.dtype
         assert_close(bias.grad, ref_bias.grad, rtol=0.2, atol=0.1)
 
 
-@pytest.mark.skipif(get_accelerator().get_device_capability()[0] < 9, reason="Test requires device capability >= 9.0")
+@pytest.mark.skipif(FP8_GEMM_UNSUPPORTED, reason="Test requires an fp8 GEMM (device capability >= 9.0 on CUDA)")
 @pytest.mark.parametrize("use_bias", [True, False])
 @pytest.mark.parametrize("use_batch", [True, False])
 def test_fp8_linear(use_bias: bool, use_batch: bool):
@@ -50,7 +56,7 @@ def test_fp8_linear(use_bias: bool, use_batch: bool):
     check_fp8_linear(linear_fp8, use_bias, use_batch, torch.bfloat16)
 
 
-@pytest.mark.skipif(get_accelerator().get_device_capability()[0] < 9, reason="Test requires device capability >= 9.0")
+@pytest.mark.skipif(FP8_GEMM_UNSUPPORTED, reason="Test requires an fp8 GEMM (device capability >= 9.0 on CUDA)")
 @pytest.mark.parametrize("legacy_return", [False, True], ids=["tensor-return", "tuple-return"])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("use_bias", [False, True])
