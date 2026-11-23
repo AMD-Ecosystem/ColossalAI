@@ -74,9 +74,9 @@ __device__ void cuWelfordMuSigma2(const T* __restrict__ vals, const int n1,
     // intra-warp reductions
     for (int l = 0; l <= 4; ++l) {
       int srcLaneB = (threadIdx.x + (1 << l)) & 31;
-      U muB = WARP_SHFL(mu, srcLaneB);
-      U countB = WARP_SHFL(count, srcLaneB);
-      U sigma2B = WARP_SHFL(sigma2, srcLaneB);
+      U muB = WARP_SHFL(mu, srcLaneB, 32);
+      U countB = WARP_SHFL(count, srcLaneB, 32);
+      U sigma2B = WARP_SHFL(sigma2, srcLaneB, 32);
       cuChanOnlineSum<U>(muB, sigma2B, countB, mu, sigma2, count);
     }
     // threadIdx.x == 0 has correct values for each warp
@@ -113,8 +113,8 @@ __device__ void cuWelfordMuSigma2(const T* __restrict__ vals, const int n1,
       sigma2 = ubuf[1] / U(n2);
       // don't care about final value of count, we know count == n2
     } else {
-      mu = WARP_SHFL(mu, 0);
-      sigma2 = WARP_SHFL(sigma2 / U(n2), 0);
+      mu = WARP_SHFL(mu, 0, 32);
+      sigma2 = WARP_SHFL(sigma2 / U(n2), 0, 32);
     }
   }
 }
@@ -164,9 +164,9 @@ __device__ void cuWelfordMuSigma2(const at::Half* __restrict__ vals,
     // intra-warp reductions
     for (int l = 0; l <= 4; ++l) {
       int srcLaneB = (threadIdx.x + (1 << l)) & 31;
-      float muB = WARP_SHFL(mu, srcLaneB);
-      float countB = WARP_SHFL(count, srcLaneB);
-      float sigma2B = WARP_SHFL(sigma2, srcLaneB);
+      float muB = WARP_SHFL(mu, srcLaneB, 32);
+      float countB = WARP_SHFL(count, srcLaneB, 32);
+      float sigma2B = WARP_SHFL(sigma2, srcLaneB, 32);
       cuChanOnlineSum(muB, sigma2B, countB, mu, sigma2, count);
     }
     // threadIdx.x == 0 has correct values for each warp
@@ -203,12 +203,15 @@ __device__ void cuWelfordMuSigma2(const at::Half* __restrict__ vals,
       sigma2 = ubuf[1] / float(n2);
       // don't care about final value of count, we know count == n2
     } else {
-      mu = WARP_SHFL(mu, 0);
-      sigma2 = WARP_SHFL(sigma2 / float(n2), 0);
+      mu = WARP_SHFL(mu, 0, 32);
+      sigma2 = WARP_SHFL(sigma2 / float(n2), 0, 32);
     }
   }
 }
 
+// HIP's rsqrtf is device-only; device code below uses the math library's
+// rsqrt overloads on every platform.
+#if !defined(USE_ROCM)
 template <typename U>
 U rsqrt(U v) {
   return U(1) / sqrt(v);
@@ -221,6 +224,7 @@ template <>
 double rsqrt(double v) {
   return rsqrt(v);
 }
+#endif
 
 namespace {
 // This is the un-specialized struct.  Note that we prevent instantiation of

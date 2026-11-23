@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -44,7 +44,7 @@ COLOSSAL_UNARY_FUNCTOR_SPECIALIZATION(int, int, UnaryOpType::kLog2Ceil,
                                         return log2_value;
                                       })
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 
 COLOSSAL_UNARY_FUNCTOR_SPECIALIZATION(float2, float, UnaryOpType::kSum, DEVICE,
                                       { return val.x + val.y; })
@@ -59,7 +59,7 @@ COLOSSAL_UNARY_FUNCTOR_SPECIALIZATION(dtype::float8, float, UnaryOpType::kSum,
                                                val.w.x + val.w.y;
                                       })
 
-#endif /* defined(COLOSSAL_WITH_CUDA) */
+#endif /* defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP) */
 
 #undef COLOSSAL_UARY_FUNCTOR_SPECIALIZATION
 

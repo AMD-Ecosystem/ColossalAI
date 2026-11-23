@@ -223,7 +223,7 @@
              "'");                                                             \
   }
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #define HOST __host__
 #define DEVICE __device__
 #define HOSTDEVICE __host__ __device__
@@ -231,4 +231,12 @@
 #define HOST
 #define DEVICE
 #define HOSTDEVICE
+#endif
+
+// Lane mask of a full 32-thread warp for the *_sync warp intrinsics. HIP takes
+// a 64-bit mask; on a 64-wide wavefront each 32-thread warp names its own half.
+#if defined(USE_ROCM)
+#define COLOSSAL_FULL_WARP_MASK (0xffffffffull << (__lane_id() & 32))
+#else
+#define COLOSSAL_FULL_WARP_MASK 0xffffffffu
 #endif

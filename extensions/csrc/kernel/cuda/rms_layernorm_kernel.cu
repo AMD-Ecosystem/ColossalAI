@@ -20,6 +20,15 @@ using colossalAI::funcs::BinaryOpFunctor;
 using colossalAI::funcs::BinaryOpType;
 using colossalAI::common::VecTypeTrait;
 
+#if defined(USE_ROCM)
+// hipify turns the launches below into hipLaunchKernelGGL(...), so the general_
+// prefix that DISPATCH_RMSNORM_FLOAT_HALF_AND_BFLOAT pastes onto a launch names
+// this macro. Forward it to the general_ kernel.
+#define COLOSSAL_GENERAL_KERNEL(...) general_##__VA_ARGS__
+#define general_hipLaunchKernelGGL(KERNEL, ...) \
+  hipLaunchKernelGGL((COLOSSAL_GENERAL_KERNEL KERNEL), __VA_ARGS__)
+#endif
+
 #define RMSNORM_LAUNCHER(UNROLL_FACTOR, THREADDIM)                                 \
   DISPATCH_RMSNORM_FLOAT_HALF_AND_BFLOAT(                                          \
     input.element_size(),                                                          \

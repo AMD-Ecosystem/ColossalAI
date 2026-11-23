@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #include <cuda.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -12,7 +12,6 @@ namespace funcs {
 
 const float kReduceFloatInfNeg = -100000000.f;
 const float kReduceFloatInfPos = 100000000.f;
-const unsigned int kWarpReduceMask = 0xffffffff;
 
 enum class ReduceType { kMax = 0, kSum };
 
@@ -65,7 +64,7 @@ struct GetOpForReduceType<T, ReduceType::kSum> {
 template <typename T, ReduceType rtype, int lanes, int width = 32>
 __forceinline__ __device__ void warp_reduce(T* pval) {
   typename GetOpForReduceType<T, rtype>::Op op;
-  COLOSSAL_WARP_REDUCE_IMPL(kWarpReduceMask, pval, width, op, lanes);
+  COLOSSAL_WARP_REDUCE_IMPL(COLOSSAL_FULL_WARP_MASK, pval, width, op, lanes);
 }
 
 template <typename T, ReduceType rtype>
@@ -91,4 +90,4 @@ __forceinline__ __device__ void block_reduce(T* pval) {
 }  // namespace funcs
 }  // namespace colossalAI
 
-#endif /* defined(COLOSSAL_WITH_CUDA) */
+#endif /* defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP) */

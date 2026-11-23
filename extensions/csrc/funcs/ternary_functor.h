@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -31,7 +31,7 @@ struct TernaryOpFunctor;
     FUNCTION_MODIFIER RET operator()(LT a, RT b, RET c) STMTS        \
   };
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 COLOSSAL_TERNARY_FUNCTOR_SPECIALIZATION(float, float, float,
                                         TernaryOpType::kFma, DEVICE,
                                         STMTS_WRAPPER({
@@ -205,7 +205,7 @@ COLOSSAL_TERNARY_FUNCTOR_SPECIALIZATION(
       return fd;
     }))
 
-#endif /* defined(COLOSSAL_WITH_CUDA) */
+#endif /* defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP) */
 
 #undef COLOSSAL_TERNARY_FUNCTOR_SPECIALIZATION
 #undef STMTS_WRAPPER

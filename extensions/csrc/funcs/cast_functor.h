@@ -1,10 +1,12 @@
 #pragma once
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#if !defined(USE_ROCM)
 #include <cuda_fp8.h>
+#endif
 #include <cuda_runtime.h>
 #endif
 
@@ -36,7 +38,59 @@ struct CastFunctor : public std::unary_function<From, To> {
     FUNCTION_MODIFIER TO operator()(FROM val) STMTS                       \
   };
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
+#if defined(USE_ROCM)
+// OCP E5M2 conversions with the semantics of the CUDA intrinsics used below
+// (round to nearest even, saturate to finite, NaN stays NaN). E5M2 is the
+// upper byte of an IEEE half, so cached bytes are the same on every GPU.
+namespace detail {
+__device__ __forceinline__ uint16_t e5m2_to_halfraw(uint8_t val) {
+  return static_cast<uint16_t>(val) << 8;
+}
+
+__device__ __forceinline__ uint8_t halfraw_to_e5m2(uint16_t val) {
+  const uint8_t sign = (val >> 8) & 0x80;
+  const uint16_t mag = val & 0x7fff;
+  if (mag > 0x7c00) return sign | 0x7f;
+  const uint16_t res = (mag + 0x7f + ((mag >> 8) & 1)) >> 8;
+  return sign | (res > 0x7b ? 0x7b : res);
+}
+
+__device__ __forceinline__ uint8_t float_to_e5m2(float val) {
+  const uint32_t bits = __float_as_uint(val);
+  const uint8_t sign = (bits >> 24) & 0x80;
+  const uint32_t mag = bits & 0x7fffffff;
+  if (mag > 0x7f800000) return sign | 0x7f;
+  // 57344 is the largest finite E5M2 value.
+  if (mag >= 0x47600000) return sign | 0x7b;
+  // Below 2^-14 the result is an E5M2 subnormal, a multiple of 2^-16.
+  if (mag < 0x38800000)
+    return sign | static_cast<uint8_t>(
+                      __float2int_rn(__uint_as_float(mag) * 65536.0f));
+  const uint32_t rebiased = mag - (112u << 23);
+  return sign | static_cast<uint8_t>(
+                    (rebiased + 0xfffff + ((rebiased >> 21) & 1)) >> 21);
+}
+
+__device__ __forceinline__ float halfraw_to_float(uint16_t val) {
+  return __half2float(__ushort_as_half(val));
+}
+}  // namespace detail
+#endif
+
+#if defined(USE_ROCM)
+// c10::BFloat16 has no implicit conversion from the HIP bf16 type in an
+// extension build, so convert the lanes of bf16 vectors here.
+template <>
+struct CastFunctor<at::BFloat16, float>
+    : public std::unary_function<at::BFloat16, float> {
+  HOSTDEVICE float operator()(at::BFloat16 val) {
+    return static_cast<float>(val);
+  }
+  DEVICE float operator()(__nv_bfloat16 val) { return __bfloat162float(val); }
+};
+#endif
+
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(int2, float2, DEVICE, STMTS_WRAPPER({
                                        return make_float2(val.x, val.y);
                                      }))
@@ -172,19 +226,27 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
 // quant utils
 // fp8 -> half raw
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(uint8_t, uint16_t, DEVICE, STMTS_WRAPPER({
+#if defined(USE_ROCM)
+                                       return detail::e5m2_to_halfraw(val);
+#else
                                        __half_raw res = __nv_cvt_fp8_to_halfraw(
                                            val, __NV_E5M2);
                                        return res.x;
+#endif
                                      }))
 
 // half raw -> fp8
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(uint16_t, uint8_t, DEVICE, STMTS_WRAPPER({
+#if defined(USE_ROCM)
+                                       return detail::halfraw_to_e5m2(val);
+#else
                                        __half_raw tmp;
                                        tmp.x = val;
                                        __nv_fp8_storage_t res =
                                            __nv_cvt_halfraw_to_fp8(
                                                tmp, __NV_SATFINITE, __NV_E5M2);
                                        return static_cast<uint8_t>(res);
+#endif
                                      }))
 
 // fp8x2 -> half2 raw
@@ -193,11 +255,18 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(uint16_t, uint32_t, DEVICE, STMTS_WRAPPER({
                                          uint16_t u16[2];
                                          uint32_t u32;
                                        } tmp;
+#if defined(USE_ROCM)
+                                       tmp.u16[0] = detail::e5m2_to_halfraw(
+                                           static_cast<uint8_t>(val));
+                                       tmp.u16[1] = detail::e5m2_to_halfraw(
+                                           static_cast<uint8_t>(val >> 8U));
+#else
                                        __half2_raw res =
                                            __nv_cvt_fp8x2_to_halfraw2(
                                                val, __NV_E5M2);
                                        tmp.u16[0] = res.x;
                                        tmp.u16[1] = res.y;
+#endif
                                        return tmp.u32;
                                      }))
 
@@ -229,35 +298,61 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
 
 // fp8 -> half
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(uint8_t, half, DEVICE, STMTS_WRAPPER({
+#if defined(USE_ROCM)
+                                       return __ushort_as_half(
+                                           detail::e5m2_to_halfraw(val));
+#else
                                        __half_raw res = __nv_cvt_fp8_to_halfraw(
                                            val, __NV_E5M2);
                                        return half(res);
+#endif
                                      }))
 
 // half -> fp8
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(half, uint8_t, DEVICE, STMTS_WRAPPER({
+#if defined(USE_ROCM)
+                                       return detail::halfraw_to_e5m2(
+                                           __half_as_ushort(val));
+#else
                                        __half_raw tmp(val);
                                        __nv_fp8_storage_t res =
                                            __nv_cvt_halfraw_to_fp8(
                                                tmp, __NV_SATFINITE, __NV_E5M2);
                                        return static_cast<uint8_t>(res);
+#endif
                                      }))
 
 // fp8x2 -> half2
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(uint16_t, half2, DEVICE, STMTS_WRAPPER({
+#if defined(USE_ROCM)
+                                       return __halves2half2(
+                                           __ushort_as_half(detail::e5m2_to_halfraw(
+                                               static_cast<uint8_t>(val))),
+                                           __ushort_as_half(detail::e5m2_to_halfraw(
+                                               static_cast<uint8_t>(val >> 8U))));
+#else
                                        __half2_raw res =
                                            __nv_cvt_fp8x2_to_halfraw2(
                                                val, __NV_E5M2);
                                        return half2(res);
+#endif
                                      }))
 
 // half2 -> fp8x2
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(half2, uint16_t, DEVICE, STMTS_WRAPPER({
+#if defined(USE_ROCM)
+                                       uint16_t lo = detail::halfraw_to_e5m2(
+                                           __half_as_ushort(__low2half(val)));
+                                       uint16_t hi = detail::halfraw_to_e5m2(
+                                           __half_as_ushort(__high2half(val)));
+                                       return (hi << 8U) | lo;
+#else
                                        __half2_raw tmp(val);
                                        __nv_fp8x2_storage_t res =
                                            __nv_cvt_halfraw2_to_fp8x2(
                                                tmp, __NV_SATFINITE, __NV_E5M2);
                                        return static_cast<uint16_t>(res);
+#endif
                                      }))
 
 // fp8x4 -> half4
@@ -282,7 +377,11 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
       lo = CastFunctor<half2, uint16_t>()(x);
       hi = CastFunctor<half2, uint16_t>()(y);
       uint32_t res;
+#if defined(USE_ROCM)
+      res = (static_cast<uint32_t>(hi) << 16U) | lo;
+#else
       asm volatile("mov.b32 %0, {%1, %2};\n" : "=r"(res) : "h"(lo), "h"(hi));
+#endif
       return res;
     }))
 
@@ -304,12 +403,19 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
     uint8_t, __nv_bfloat16, DEVICE, STMTS_WRAPPER({
       // Note there is no direct convert function from fp8 to bf16.
+#if defined(USE_ROCM)
+      // Every E5M2 value is exact in bf16, the upper half of its float bits.
+      float tmp = detail::halfraw_to_float(detail::e5m2_to_halfraw(val));
+      return __ushort_as_bfloat16(
+          static_cast<uint16_t>(__float_as_uint(tmp) >> 16U));
+#else
       // fp8 -> half
       __half_raw res = __nv_cvt_fp8_to_halfraw(val, __NV_E5M2);
       // half -> float -> bf16
       float tmp;
       asm volatile("cvt.f32.f16 %0, %1;\n" : "=f"(tmp) : "h"(res.x));
       return __float2bfloat16(tmp);
+#endif
     }))
 
 // fp8x2 -> __nv_bfloat162
@@ -353,17 +459,25 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
       // fp8 -> half
       uint16_t tmp = CastFunctor<uint8_t, uint16_t>()(val);
       // half -> float
+#if defined(USE_ROCM)
+      return detail::halfraw_to_float(tmp);
+#else
       float res;
       asm volatile("cvt.f32.f16 %0, %1;\n" : "=f"(res) : "h"(tmp));
       return res;
+#endif
     }))
 
 // float -> fp8
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(float, uint8_t, DEVICE, STMTS_WRAPPER({
+#if defined(USE_ROCM)
+                                       return detail::float_to_e5m2(val);
+#else
                                        __nv_fp8_storage_t res =
                                            __nv_cvt_float_to_fp8(
                                                val, __NV_SATFINITE, __NV_E5M2);
                                        return static_cast<uint8_t>(res);
+#endif
                                      }))
 
 // fp8x2 -> float2
@@ -372,12 +486,18 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
       // fp8x2 -> half2
       uint32_t tmp = CastFunctor<uint16_t, uint32_t>()(val);
       // half2 -> float2
+#if defined(USE_ROCM)
+      return make_float2(
+          detail::halfraw_to_float(static_cast<uint16_t>(tmp)),
+          detail::halfraw_to_float(static_cast<uint16_t>(tmp >> 16U)));
+#else
       uint16_t lo, hi;
       asm volatile("mov.b32 {%0, %1}, %2;\n" : "=h"(lo), "=h"(hi) : "r"(tmp));
       float lof, hif;
       asm volatile("cvt.f32.f16 %0, %1;\n" : "=f"(lof) : "h"(lo));
       asm volatile("cvt.f32.f16 %0, %1;\n" : "=f"(hif) : "h"(hi));
       return make_float2(lof, hif);
+#endif
     }))
 
 // float2 -> fp8x2
@@ -429,7 +549,10 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
 // bf16 -> fp8
 COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(__nv_bfloat16, uint8_t, DEVICE,
                                      STMTS_WRAPPER({
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+#if defined(USE_ROCM)
+                                       return detail::float_to_e5m2(
+                                           __bfloat162float(val));
+#elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
                                        assert(false);
 #else
                                        __nv_fp8_storage_t res =
@@ -457,7 +580,11 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
       uint16_t a, b;
       a = CastFunctor<__nv_bfloat162, uint16_t>()(val.x);
       b = CastFunctor<__nv_bfloat162, uint16_t>()(val.y);
+#if defined(USE_ROCM)
+      res = (static_cast<uint32_t>(b) << 16U) | a;
+#else
       asm volatile("mov.b32 %0, {%1, %2};\n" : "=r"(res) : "h"(a), "h"(b));
+#endif
       return res;
     }))
 
@@ -495,7 +622,7 @@ COLOSSAL_CAST_FUNCTOR_SPECIALIZATION(
       return b;
     }))
 
-#endif /* defined(COLOSSAL_WITH_CUDA) */
+#endif /* defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP) */
 
 #undef STMTS_WRAPPER
 #undef COLOSSAL_CAST_FUNCTOR_SPECIALIZATION

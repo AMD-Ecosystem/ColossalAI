@@ -142,10 +142,13 @@ def test_flash_decoding_attention(
             rtol = 1e-5
             atol = 1e-7
 
+            # ROCm's fp32 GEMMs round differently from cuBLAS by more than atol; compare against a
+            # float64 reference there so the tolerance measures the kernel, not the reference.
+            ref_dtype = torch.float64 if torch.version.hip is not None else dtype
             out_ref = torch_attn_ref(
-                q,
-                k_torch,
-                v_torch,
+                q.to(ref_dtype),
+                k_torch.to(ref_dtype),
+                v_torch.to(ref_dtype),
                 torch_padding_mask,
                 BATCH_SIZE,
                 q_len,
@@ -153,7 +156,7 @@ def test_flash_decoding_attention(
                 NUM_ATTN_HEADS,
                 NUM_KV_HEADS,
                 HEAD_SIZE,
-            )
+            ).to(dtype)
 
     except torch.cuda.OutOfMemoryError:
         pytest.skip("Required GPU memory is larger than capacity.")

@@ -4,7 +4,7 @@
 
 #include "micros.h"
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #endif
@@ -32,7 +32,7 @@ struct MPTypeTrait<at::BFloat16> {
   using Type = float;
 };
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 template <>
 struct MPTypeTrait<half> {
   using Type = float;

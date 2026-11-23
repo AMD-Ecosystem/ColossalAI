@@ -158,6 +158,12 @@ def set_cuda_arch_list(cuda_dir):
     architecture flags for both AOT and JIT builds. With visible GPUs and no
     override, PyTorch selects the targets itself.
     """
+    import torch
+
+    if torch.version.hip is not None:
+        # ROCm builds take their targets from PYTORCH_ROCM_ARCH, else from the PyTorch build.
+        return True
+
     cuda_available = check_cuda_availability()
     if cuda_available:
         return True
@@ -208,6 +214,11 @@ def append_nvcc_threads(nvcc_extra_args: List[str]) -> List[str]:
     Returns:
         The nvcc compilation flags including the threads flag.
     """
+    import torch
+
+    if torch.version.hip is not None:
+        return nvcc_extra_args
+
     from torch.utils.cpp_extension import CUDA_HOME
 
     bare_metal_major, bare_metal_minor = get_cuda_bare_metal_version(CUDA_HOME)

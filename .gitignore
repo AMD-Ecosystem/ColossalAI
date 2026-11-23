@@ -173,3 +173,10 @@ applications/ColossalChat/stdin
 applications/ColossalChat/*.zip
 applications/ColossalChat/*.prof
 applications/ColossalChat/*.png
+
+# hipified copies of the extension sources, written by ROCm builds
+extensions/csrc/kernel/hip/
+extensions/**/*_hip.h
+extensions/**/*_hip.cuh
+extensions/**/*_hip.cpp
+extensions/**/*.hip

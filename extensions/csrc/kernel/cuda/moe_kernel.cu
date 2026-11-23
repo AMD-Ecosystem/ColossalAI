@@ -6,6 +6,11 @@
 
 #include "funcs/reduce_function.h"
 
+#if defined(USE_ROCM)
+// hipify renames the CUB types used below but not their enumerators.
+namespace cub = hipcub;
+#endif
+
 using colossalAI::funcs::block_reduce;
 using colossalAI::funcs::ReduceType;
 

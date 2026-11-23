@@ -23,6 +23,7 @@
 #include <cuda_fp16.h>
 #include <float.h>
 
+#include "common/micros.h"
 #include "common/vec_type_traits.h"
 #include "funcs/binary_functor.h"
 #include "funcs/cast_functor.h"
@@ -37,8 +38,9 @@ namespace attention {
 #define VEC_SIZE_8 8
 
 #define SHFL_XOR_SYNC(var, lane_mask) \
-  __shfl_xor_sync(uint32_t(-1), var, lane_mask)
-#define SHFL_SYNC(var, src_lane) __shfl_sync(uint32_t(-1), var, src_lane)
+  __shfl_xor_sync(COLOSSAL_FULL_WARP_MASK, var, lane_mask, WARP_SIZE)
+#define SHFL_SYNC(var, src_lane) \
+  __shfl_sync(COLOSSAL_FULL_WARP_MASK, var, src_lane, WARP_SIZE)
 
 // Q*K^T operation.
 template <int NUM_THREADS_PER_ROUNDS, int NUM_THREADS_PER_X, typename VecT,

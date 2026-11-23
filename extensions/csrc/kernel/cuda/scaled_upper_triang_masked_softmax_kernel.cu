@@ -26,6 +26,15 @@ using colossalAI::funcs::ReduceType;
 using colossalAI::cuda::utils::copy;
 using colossalAI::cuda::utils::copy_zero;
 
+// Kernels and their host launchers must agree on the warp width. In ROCm
+// builds C10_WARP_SIZE is a runtime value in host code, so use a fixed
+// 32-thread warp there.
+#if defined(USE_ROCM)
+#define SOFTMAX_WARP_SIZE 32
+#else
+#define SOFTMAX_WARP_SIZE C10_WARP_SIZE
+#endif
+
 /*
  * Extended softmax (from native aten pytorch) with following additional
  * features 1) input scaling 2) Implicit time (diagonal masking)
@@ -39,7 +48,7 @@ __global__ void scaled_upper_triang_masked_softmax_warp_forward(
   // warp_size of method warp_softmax_forward_kernel.
   constexpr int next_power_of_two = 1 << log2_elements;
   constexpr int WARP_SIZE =
-      (next_power_of_two < C10_WARP_SIZE) ? next_power_of_two : C10_WARP_SIZE;
+      (next_power_of_two < SOFTMAX_WARP_SIZE) ? next_power_of_two : SOFTMAX_WARP_SIZE;
   constexpr int WARP_ITERATIONS = next_power_of_two / WARP_SIZE;
   constexpr int WARP_BATCH = (next_power_of_two <= 128) ? 2 : 1;
   constexpr int ELEMENTS_PER_LDG_STG = (WARP_ITERATIONS < 4) ? 1 : 4;
@@ -161,7 +170,7 @@ __global__ void scaled_upper_triang_masked_softmax_warp_backward(
   // warp_size of method warp_softmax_backward_kernel.
   constexpr int next_power_of_two = 1 << log2_elements;
   constexpr int WARP_SIZE =
-      (next_power_of_two < C10_WARP_SIZE) ? next_power_of_two : C10_WARP_SIZE;
+      (next_power_of_two < SOFTMAX_WARP_SIZE) ? next_power_of_two : SOFTMAX_WARP_SIZE;
   constexpr int WARP_ITERATIONS = next_power_of_two / WARP_SIZE;
   constexpr int WARP_BATCH = (next_power_of_two <= 128) ? 2 : 1;
   constexpr int ELEMENTS_PER_LDG_STG = (WARP_ITERATIONS < 4) ? 1 : 4;
@@ -271,7 +280,7 @@ void dispatch_scaled_upper_triang_masked_softmax_forward(
     // This value must match the WARP_SIZE constexpr value computed inside
     // softmax_warp_forward.
     int warp_size =
-        (next_power_of_two < C10_WARP_SIZE) ? next_power_of_two : C10_WARP_SIZE;
+        (next_power_of_two < SOFTMAX_WARP_SIZE) ? next_power_of_two : SOFTMAX_WARP_SIZE;
 
     // This value must match the WARP_BATCH constexpr value computed inside
     // softmax_warp_forward.
@@ -396,7 +405,7 @@ void dispatch_scaled_upper_triang_masked_softmax_backward(
     // This value must match the WARP_SIZE constexpr value computed inside
     // softmax_warp_backward.
     int warp_size =
-        (next_power_of_two < C10_WARP_SIZE) ? next_power_of_two : C10_WARP_SIZE;
+        (next_power_of_two < SOFTMAX_WARP_SIZE) ? next_power_of_two : SOFTMAX_WARP_SIZE;
 
     // This value must match the WARP_BATCH constexpr value computed inside
     // softmax_warp_backward.

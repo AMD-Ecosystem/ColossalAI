@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -55,7 +55,7 @@ COLOSSAL_BINARY_FUNCTOR_SPECIALIZATION(T, T, T, BinaryOpType::kMin, HOSTDEVICE,
                                        STMTS_WRAPPER({ return min(lhs, rhs); }),
                                        typename T)
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 COLOSSAL_BINARY_FUNCTOR_SPECIALIZATION(half, half, half, BinaryOpType::kMinus,
                                        DEVICE, STMTS_WRAPPER({
                                          return __hsub(lhs, rhs);
@@ -223,7 +223,7 @@ COLOSSAL_BINARY_FUNCTOR_SPECIALIZATION(
       return fc;
     }))
 
-#endif /* defined(COLOSSAL_WITH_CUDA) */
+#endif /* defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP) */
 
 #undef COLOSSAL_BINARY_FUNCTOR_SPECIALIZATION
 #undef STMTS_WRAPPER

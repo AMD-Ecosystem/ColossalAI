@@ -1,6 +1,6 @@
 #pragma once
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #endif
@@ -27,7 +27,7 @@ struct FloatVecTypeTrait {};
 
 VEC_TYPE_TRAITS_SPECIALIZATION(T, 1, T, typename T)
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 
 VEC_TYPE_TRAITS_SPECIALIZATION(at::BFloat16, 1, __nv_bfloat16)
 VEC_TYPE_TRAITS_SPECIALIZATION(at::BFloat16, 2, __nv_bfloat162)
@@ -50,7 +50,7 @@ VEC_TYPE_TRAITS_SPECIALIZATION(half, 8, dtype::half8);
 VEC_TYPE_TRAITS_SPECIALIZATION(float, 2, float2)
 VEC_TYPE_TRAITS_SPECIALIZATION(float, 4, float4)
 VEC_TYPE_TRAITS_SPECIALIZATION(float, 8, dtype::float8)
-#endif /* defined(COLOSSAL_WITH_CUDA) */
+#endif /* defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP) */
 
 #undef VEC_TYPE_TRAITS_SPECIALIZATION
 
@@ -60,7 +60,7 @@ VEC_TYPE_TRAITS_SPECIALIZATION(float, 8, dtype::float8)
     using Type = FLOATT;                                        \
   };
 
-#if defined(COLOSSAL_WITH_CUDA)
+#if defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP)
 FLOATVEC_TYPE_TRAITS_SPECIALIZATION(float2, float2)
 FLOATVEC_TYPE_TRAITS_SPECIALIZATION(float4, float4)
 FLOATVEC_TYPE_TRAITS_SPECIALIZATION(__nv_bfloat162, float2);
@@ -69,7 +69,7 @@ FLOATVEC_TYPE_TRAITS_SPECIALIZATION(dtype::bfloat168, dtype::float8);
 FLOATVEC_TYPE_TRAITS_SPECIALIZATION(half2, float2);
 FLOATVEC_TYPE_TRAITS_SPECIALIZATION(dtype::half4, float4);
 FLOATVEC_TYPE_TRAITS_SPECIALIZATION(dtype::half8, dtype::float8);
-#endif /* COLOSSAL_WITH_CUDA */
+#endif /* defined(COLOSSAL_WITH_CUDA) || defined(COLOSSAL_WITH_HIP) */
 
 #undef FLOATVEC_TYPE_TRAITS_SPECIALIZATION
 }  // namespace common

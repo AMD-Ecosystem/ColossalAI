@@ -14,6 +14,30 @@ __all__ = ["_CudaExtension"]
 MIN_PYTORCH_VERSION_MAJOR = 2
 MIN_PYTORCH_VERSION_MINOR = 2
 
+# nvcc options with no hipcc counterpart.
+NVCC_ONLY_FLAGS = ("--use_fast_math", "-lineinfo", "--expt-relaxed-constexpr", "--expt-extended-lambda")
+
+
+def is_rocm_pytorch() -> bool:
+    import torch
+
+    return torch.version.hip is not None
+
+
+def to_hipcc_flags(nvcc_flags: List[str]) -> List[str]:
+    """
+    Translate an extension's nvcc flags for hipcc. Like torch's ahead-of-time ROCm build, rename CUDA to HIP
+    in macro flags (-DCOLOSSAL_WITH_CUDA becomes -DCOLOSSAL_WITH_HIP), so JIT and AOT builds compile the same code.
+    """
+    hipcc_flags = []
+    for flag in nvcc_flags:
+        if flag in NVCC_ONLY_FLAGS or flag.startswith("-maxrregcount"):
+            continue
+        if flag.startswith(("-D", "-U")):
+            flag = flag.replace("CUDA", "HIP", 1)
+        hipcc_flags.append(flag)
+    return hipcc_flags
+
 
 class _CudaExtension(_CppExtension):
     @abstractmethod
@@ -39,13 +63,21 @@ class _CudaExtension(_CppExtension):
         # A prebuilt extension needs the CUDA runtime, not a local CUDA compiler.
         import torch
 
-        if torch.version.cuda is None:
+        if torch.version.cuda is None and torch.version.hip is None:
             raise RuntimeError(f"[extension] The {self.name} kernel requires a CUDA-enabled PyTorch installation")
         check_pytorch_version(MIN_PYTORCH_VERSION_MAJOR, MIN_PYTORCH_VERSION_MINOR)
 
     def assert_build_compatible(self) -> None:
         # Dispatch through the existing hook to retain custom hardware checks.
         self.assert_compatible()
+        if is_rocm_pytorch():
+            from torch.utils.cpp_extension import ROCM_HOME
+
+            if not ROCM_HOME:
+                raise AssertionError(
+                    "[extension] ROCM_HOME is not found. You need to export ROCM_HOME environment variable or install ROCm first in order to build HIP extensions"
+                )
+            return
         from torch.utils.cpp_extension import CUDA_HOME
 
         if not CUDA_HOME:
@@ -58,6 +90,10 @@ class _CudaExtension(_CppExtension):
         """
         return include path inside the cuda home.
         """
+        if is_rocm_pytorch():
+            # hipcc adds the ROCm include directory itself. Torch hipifies every header under an
+            # extension's include directories, so the ROCm tree must not be listed.
+            return ""
         from torch.utils.cpp_extension import CUDA_HOME
 
         if CUDA_HOME is None:
@@ -70,6 +106,14 @@ class _CudaExtension(_CppExtension):
         This function should return a list of include files for extensions.
         """
         return super().include_dirs() + [self.get_cuda_home_include()]
+
+    def device_flags(self) -> List[str]:
+        """
+        Return the device compiler flags for the installed PyTorch: nvcc_flags() on CUDA, translated for hipcc on ROCm.
+        """
+        if is_rocm_pytorch():
+            return to_hipcc_flags(self.strip_empty_entries(self.nvcc_flags()))
+        return self.nvcc_flags()
 
     def build_jit(self) -> None:
         from torch.utils.cpp_extension import CUDA_HOME, load
@@ -99,7 +143,7 @@ class _CudaExtension(_CppExtension):
             sources=self.strip_empty_entries(self.sources_files()),
             extra_include_paths=self.strip_empty_entries(self.include_dirs()),
             extra_cflags=self.cxx_flags(),
-            extra_cuda_cflags=self.nvcc_flags(),
+            extra_cuda_cflags=self.device_flags(),
             extra_ldflags=[],
             build_directory=str(build_directory),
         )
@@ -122,6 +166,6 @@ class _CudaExtension(_CppExtension):
             include_dirs=self.strip_empty_entries(self.include_dirs()),
             extra_compile_args={
                 "cxx": self.strip_empty_entries(self.cxx_flags()),
-                "nvcc": self.strip_empty_entries(self.nvcc_flags()),
+                "nvcc": self.strip_empty_entries(self.device_flags()),
             },
         )

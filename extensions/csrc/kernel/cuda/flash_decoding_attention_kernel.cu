@@ -21,6 +21,20 @@
 // 2^n => 2^n, 2^n-d => 2^(n-1)
 #define ROUND_DOWN_HIGHEST_POWER_OF_TWO(x) (nextHighestPowerOf2((x - (x + 1) / 2 + 1)))
 
+#if defined(USE_ROCM)
+// AMD GPUs give a block far less shared memory than recent NVIDIA GPUs, and a
+// launch that asks for more fails without saying why.
+static void check_shared_mem_size(int shared_mem_size) {
+  const cudaDeviceProp* prop = at::cuda::getCurrentDeviceProperties();
+  const size_t limit =
+      std::max(prop->sharedMemPerBlock, prop->sharedMemPerBlockOptin);
+  TORCH_CHECK(static_cast<size_t>(shared_mem_size) <= limit,
+              "flash_decoding_attention needs ", shared_mem_size,
+              " bytes of shared memory per block, but the device allows ",
+              limit);
+}
+#endif
+
 // a bit magic, you can ask chatgpt for help
 // 2^n => 2^n, 2^n-d => 2^n
 constexpr unsigned int nextHighestPowerOf2(unsigned int v) {
@@ -385,6 +399,9 @@ void flash_decoding_attention_v1_launcher(
   int outputs_size = (NUM_WARPS / 2) * NUM_THREADS_PER_TOKEN * VEC_SIZE * sizeof(float);
   // Keep that in sync with the logic here!
   int shared_mem_size = std::max(logits_size, outputs_size) + DIVIDE_ROUND_UP(max_num_blocks_per_seq * sizeof(int), sizeof(float4)) * sizeof(float4);
+#if defined(USE_ROCM)
+  check_shared_mem_size(shared_mem_size);
+#endif
 
   const float* alibi_slopes_ptr = alibi_slopes ?
     reinterpret_cast<const float*>(alibi_slopes.value().data_ptr())
@@ -710,6 +727,10 @@ void flash_decoding_attention_v2_launcher(
 
   dim3 reduce_grid(num_heads, num_tokens);
   int reduce_shared_mem_size = 2 * max_num_partitions * sizeof(float);
+#if defined(USE_ROCM)
+  check_shared_mem_size(shared_mem_size);
+  check_shared_mem_size(reduce_shared_mem_size);
+#endif
 
   const at::cuda::OptionalCUDAGuard device_guard(device_of(query));
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
