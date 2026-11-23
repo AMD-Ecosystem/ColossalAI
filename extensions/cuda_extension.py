@@ -146,6 +146,8 @@ class _CudaExtension(_CppExtension):
             extra_cuda_cflags=self.device_flags(),
             extra_ldflags=[],
             build_directory=str(build_directory),
+            # load() hipifies only extensions with CUDA sources; CPU Adam's C++ includes CUDA headers too.
+            with_cuda=True if is_rocm_pytorch() else None,
         )
         build_duration = time.time() - build_start
 
