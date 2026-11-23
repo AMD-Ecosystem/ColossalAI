@@ -1,3 +1,4 @@
+import os
 import warnings
 from dataclasses import dataclass, field
 from functools import lru_cache, partial
@@ -132,10 +133,27 @@ class FlashAttentionDaoLoader(KernelLoader):
     REGISTRY = [FlashAttentionDaoCudaExtension]
 
 
+# AMD GPUs supported by the ROCm build of flash-attn 2: its default composable_kernel backend
+# covers CDNA2 and later; its Triton backend (FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE) also RDNA3 and RDNA4.
+_ROCM_FA2_CK_ARCHS = ("gfx90a", "gfx942", "gfx950")
+_ROCM_FA2_TRITON_ARCHS = _ROCM_FA2_CK_ARCHS + ("gfx11", "gfx12")
+
+
+def _rocm_flash_attention_support(q):
+    arch = torch.cuda.get_device_properties(q.device).gcnArchName.split(":")[0]
+    if os.environ.get("FLASH_ATTENTION_TRITON_AMD_ENABLE", "FALSE") == "TRUE":
+        supported = _ROCM_FA2_TRITON_ARCHS
+    else:
+        supported = _ROCM_FA2_CK_ARCHS
+    if not arch.startswith(supported):
+        return f"does not support {arch} in the ROCm build of flash-attn"
+    return None
+
+
 def _flash_attention_support(q, v, attention_mask, dropout_p, is_causal, causal_alignment, non_square, *, hopper=False):
     # ROCm reuses torch.cuda, but its architecture numbers are not NVIDIA SMs.
-    # These adapters are validated for NVIDIA; ROCm needs its own capability policy.
-    if torch.version.hip is not None:
+    # FA3 is NVIDIA-only; FA2 on ROCm is checked against the ROCm build's GPU list below.
+    if torch.version.hip is not None and hopper:
         return "requires NVIDIA CUDA in this adapter; ROCm is not supported"
     if q.dtype not in (torch.float16, torch.bfloat16):
         return "requires float16 or bfloat16 inputs"
@@ -149,6 +167,8 @@ def _flash_attention_support(q, v, attention_mask, dropout_p, is_causal, causal_
         return "does not support non-square upper-left causal attention"
     if hopper and dropout_p != 0:
         return "does not support nonzero dropout"
+    if torch.version.hip is not None:
+        return _rocm_flash_attention_support(q)
     major, minor = torch.cuda.get_device_capability(q.device)
     if hopper and (major, minor) != (9, 0):
         return "requires a Hopper (SM90) GPU in this adapter"

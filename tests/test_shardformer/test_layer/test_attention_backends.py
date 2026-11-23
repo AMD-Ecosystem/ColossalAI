@@ -302,6 +302,8 @@ def test_attention_auto_cpu_and_legacy_dispatch(monkeypatch):
 def test_attention_strict_capability_and_missing_package(monkeypatch):
     # CPU-only capability tests do not pretend to execute a CUDA kernel.
     q = SimpleNamespace(device=torch.device("cuda"), dtype=torch.bfloat16, shape=(1, 2, 5, 128))
+    # Emulate an NVIDIA GPU, also under a ROCm build of PyTorch.
+    monkeypatch.setattr(torch.version, "hip", None)
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (9, 0))
     for kwargs, message in [
         ({"dropout_p": 0.1}, "dropout"),
@@ -338,6 +340,8 @@ def test_attention_old_fa2_cannot_change_causal_semantics(monkeypatch):
         lambda name: object() if name == "flash_attn" else None,
     )
     monkeypatch.setattr(kernel_loader, "version", lambda name: "2.0.9")
+    # Emulate an NVIDIA GPU, also under a ROCm build of PyTorch.
+    monkeypatch.setattr(torch.version, "hip", None)
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (9, 0))
     q = SimpleNamespace(device=torch.device("cuda"), dtype=torch.bfloat16, shape=(1, 2, 5, 128))
     assert not FlashAttentionBackendLoader.is_available("fa2")
@@ -474,16 +478,39 @@ def test_attention_registered_backend(monkeypatch):
         FlashAttentionBackendLoader.load.cache_clear()
 
 
-@pytest.mark.parametrize("backend", ["fa2", "fa3"])
-def test_attention_rocm_is_not_nvidia(backend, monkeypatch):
+@pytest.mark.parametrize("backend,message", [("fa2", "gfx1100"), ("fa3", "NVIDIA")])
+def test_attention_rocm_is_not_nvidia(backend, message, monkeypatch):
     q = SimpleNamespace(device=torch.device("cuda"), dtype=torch.bfloat16, shape=(1, 2, 5, 128))
     monkeypatch.setattr(torch.version, "hip", "6.2")
     # A HIP request must be rejected before interpreting its architecture as SM.
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: pytest.fail("queried HIP as NVIDIA"))
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(gcnArchName="gfx1100"))
+    monkeypatch.delenv("FLASH_ATTENTION_TRITON_AMD_ENABLE", raising=False)
     monkeypatch.setattr(FlashAttentionBackendLoader, "is_available", lambda backend: True)
-    with pytest.raises(NotImplementedError, match="NVIDIA"):
+    with pytest.raises(NotImplementedError, match=message):
         ColoAttention._select_backend(q, q, backend, None, 0, False, None, False)
     assert ColoAttention._select_backend(q, q, "auto", None, 0, False, None, False) == "sdpa"
+
+
+@pytest.mark.parametrize(
+    "arch,triton_backend,expected",
+    [
+        ("gfx942:sramecc+:xnack-", "FALSE", "fa2"),
+        ("gfx950", "FALSE", "fa2"),
+        ("gfx1100", "FALSE", "sdpa"),
+        ("gfx1100", "TRUE", "fa2"),
+        ("gfx1201", "TRUE", "fa2"),
+        ("gfx908", "TRUE", "sdpa"),
+    ],
+)
+def test_attention_rocm_fa2_architectures(arch, triton_backend, expected, monkeypatch):
+    q = SimpleNamespace(device=torch.device("cuda"), dtype=torch.bfloat16, shape=(1, 2, 5, 128))
+    monkeypatch.setattr(torch.version, "hip", "6.2")
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: pytest.fail("queried HIP as NVIDIA"))
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(gcnArchName=arch))
+    monkeypatch.setenv("FLASH_ATTENTION_TRITON_AMD_ENABLE", triton_backend)
+    monkeypatch.setattr(FlashAttentionBackendLoader, "is_available", lambda backend: True)
+    assert ColoAttention._select_backend(q, q, "auto", None, 0, False, None, False) == expected
 
 
 @pytest.mark.parametrize("packed", [False, True])
