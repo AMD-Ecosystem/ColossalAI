@@ -493,6 +493,13 @@ def test_attention_rocm_is_not_nvidia(backend, message, monkeypatch):
     assert ColoAttention._select_backend(q, q, "auto", None, 0, False, None, False) == "sdpa"
 
 
+@pytest.fixture
+def clear_rocm_fa2_triton_cache():
+    kernel_loader._rocm_flash_attention_triton_support.cache_clear()
+    yield
+    kernel_loader._rocm_flash_attention_triton_support.cache_clear()
+
+
 @pytest.mark.parametrize(
     "arch,triton_backend,expected",
     [
@@ -504,7 +511,7 @@ def test_attention_rocm_is_not_nvidia(backend, message, monkeypatch):
         ("gfx908", "TRUE", "sdpa"),
     ],
 )
-def test_attention_rocm_fa2_architectures(arch, triton_backend, expected, monkeypatch):
+def test_attention_rocm_fa2_architectures(arch, triton_backend, expected, monkeypatch, clear_rocm_fa2_triton_cache):
     q = SimpleNamespace(device=torch.device("cuda"), dtype=torch.bfloat16, shape=(1, 2, 5, 128))
     monkeypatch.setattr(torch.version, "hip", "6.2")
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: pytest.fail("queried HIP as NVIDIA"))
@@ -512,7 +519,6 @@ def test_attention_rocm_fa2_architectures(arch, triton_backend, expected, monkey
     monkeypatch.setenv("FLASH_ATTENTION_TRITON_AMD_ENABLE", triton_backend)
     monkeypatch.setattr(FlashAttentionBackendLoader, "is_available", lambda backend: True)
     monkeypatch.setattr(kernel_loader, "version", lambda name: "2.8.4")
-    kernel_loader._rocm_flash_attention_triton_support.cache_clear()
     assert ColoAttention._select_backend(q, q, "auto", None, 0, False, None, False) == expected
 
 
@@ -526,25 +532,37 @@ def test_attention_rocm_fa2_architectures(arch, triton_backend, expected, monkey
         ("gfx1100", "2.8.4+rocm", "fa2"),
     ],
 )
-def test_attention_rocm_fa2_triton_version(arch, installed, expected, monkeypatch):
+def test_attention_rocm_fa2_triton_version(arch, installed, expected, monkeypatch, clear_rocm_fa2_triton_cache):
     q = SimpleNamespace(device=torch.device("cuda"), dtype=torch.bfloat16, shape=(1, 2, 5, 128))
     monkeypatch.setattr(torch.version, "hip", "6.2")
     monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(gcnArchName=arch))
     monkeypatch.setenv("FLASH_ATTENTION_TRITON_AMD_ENABLE", "TRUE")
     monkeypatch.setattr(FlashAttentionBackendLoader, "is_available", lambda backend: True)
     monkeypatch.setattr(kernel_loader, "version", lambda name: installed)
-    kernel_loader._rocm_flash_attention_triton_support.cache_clear()
+    with pytest.warns(UserWarning, match="flash-attn >= 2.8.4") if expected == "sdpa" else nullcontext():
+        assert ColoAttention._select_backend(q, q, "auto", None, 0, False, None, False) == expected
+    if expected == "sdpa":
+        # The fallback is explained once, and an explicit request names the reason.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(NotImplementedError, match="flash-attn >= 2.8.4"):
+                ColoAttention._select_backend(q, q, "fa2", None, 0, False, None, False)
+
+
+@pytest.mark.parametrize("installed,expected", [("2.8.3.post2", 1.0), ("2.8.4", 2.0)])
+def test_attention_rocm_fa2_triton_version_compiled(installed, expected, monkeypatch, clear_rocm_fa2_triton_cache):
+    # The check runs inside compiled graphs too; there it must not break tracing.
+    monkeypatch.setattr(kernel_loader, "version", lambda name: installed)
+
+    def check(x):
+        return x + (1 if kernel_loader._rocm_flash_attention_triton_support() else 2)
+
+    torch._dynamo.reset()
     try:
-        with pytest.warns(UserWarning, match="flash-attn >= 2.8.4") if expected == "sdpa" else nullcontext():
-            assert ColoAttention._select_backend(q, q, "auto", None, 0, False, None, False) == expected
-        if expected == "sdpa":
-            # The fallback is explained once, and an explicit request names the reason.
-            with warnings.catch_warnings():
-                warnings.simplefilter("error")
-                with pytest.raises(NotImplementedError, match="flash-attn >= 2.8.4"):
-                    ColoAttention._select_backend(q, q, "fa2", None, 0, False, None, False)
+        out = torch.compile(check, backend="eager", fullgraph=True)(torch.zeros(2))
     finally:
-        kernel_loader._rocm_flash_attention_triton_support.cache_clear()
+        torch._dynamo.reset()
+    assert out.tolist() == [expected, expected]
 
 
 @pytest.mark.parametrize("packed", [False, True])

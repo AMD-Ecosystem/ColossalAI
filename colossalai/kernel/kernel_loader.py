@@ -156,7 +156,8 @@ def _rocm_flash_attention_triton_support():
         "and fails under torch.compile); build flash-attn from its main branch with "
         "FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE"
     )
-    warnings.warn(f"Attention backend 'fa2' is not used: it {reason}.")
+    if not torch.compiler.is_compiling():
+        warnings.warn(f"Attention backend 'fa2' is not used: it {reason}.")
     return reason
 
 
