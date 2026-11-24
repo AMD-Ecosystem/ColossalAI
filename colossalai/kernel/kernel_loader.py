@@ -2,7 +2,7 @@ import os
 import warnings
 from dataclasses import dataclass, field
 from functools import lru_cache, partial
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from importlib.util import find_spec
 from typing import Callable, List, Optional, Tuple, Type
 
@@ -137,6 +137,27 @@ class FlashAttentionDaoLoader(KernelLoader):
 # covers CDNA2 and later; its Triton backend (FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE) also RDNA3 and RDNA4.
 _ROCM_FA2_CK_ARCHS = ("gfx90a", "gfx942", "gfx950")
 _ROCM_FA2_TRITON_ARCHS = _ROCM_FA2_CK_ARCHS + ("gfx11", "gfx12")
+# Before 2.8.4, the Triton backend reads the output gradient with the output's strides,
+# giving wrong dq/dk for a non-contiguous gradient, and returns no rng_state, which breaks torch.compile.
+_ROCM_FA2_TRITON_MIN_VERSION = "2.8.4"
+
+
+@lru_cache(maxsize=None)
+def _rocm_flash_attention_triton_support():
+    try:
+        installed = version("flash-attn")
+    except PackageNotFoundError:
+        return None
+    if Version(installed) >= Version(_ROCM_FA2_TRITON_MIN_VERSION):
+        return None
+    reason = (
+        f"requires flash-attn >= {_ROCM_FA2_TRITON_MIN_VERSION} with the Triton backend "
+        f"(flash-attn {installed} computes wrong gradients for a non-contiguous output gradient "
+        "and fails under torch.compile); build flash-attn from its main branch with "
+        "FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE"
+    )
+    warnings.warn(f"Attention backend 'fa2' is not used: it {reason}.")
+    return reason
 
 
 def _rocm_flash_attention_support(q):
@@ -147,6 +168,8 @@ def _rocm_flash_attention_support(q):
         supported = _ROCM_FA2_CK_ARCHS
     if not arch.startswith(supported):
         return f"does not support {arch} in the ROCm build of flash-attn"
+    if supported is _ROCM_FA2_TRITON_ARCHS:
+        return _rocm_flash_attention_triton_support()
     return None
 
 

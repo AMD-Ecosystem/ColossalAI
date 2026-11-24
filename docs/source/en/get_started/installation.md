@@ -79,4 +79,15 @@ BUILD_EXT=1 PYTORCH_ROCM_ARCH=gfx942 pip install --no-build-isolation .
 
 The FlashAttention-2 attention backend needs the ROCm build of `flash-attn`; see its [AMD ROCm instructions](https://github.com/Dao-AILab/flash-attention#amd-rocm-support). Without it, attention uses PyTorch's `scaled_dot_product_attention`.
 
+On Instinct GPUs (gfx90a, gfx942, gfx950), `flash-attn` uses its default composable_kernel backend. On Radeon RX 7000 and 9000 series GPUs (gfx11, gfx12), it needs its Triton backend from `flash-attn` 2.8.4 or later, which at the time of writing is only available by building its main branch. Enable the backend both when building and when running:
+
+```shell
+git clone https://github.com/Dao-AILab/flash-attention.git
+cd flash-attention
+FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE AITER_USE_SYSTEM_TRITON=1 pip install --no-build-isolation .
+export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
+```
+
+`AITER_USE_SYSTEM_TRITON=1` keeps the Triton that came with your ROCm build of PyTorch. With an older `flash-attn`, attention on these GPUs uses `scaled_dot_product_attention`.
+
 <!-- doc-test-command: echo "installation.md does not need test" -->
